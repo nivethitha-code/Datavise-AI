@@ -1,0 +1,336 @@
+
+AI DATA ANALYST
+Complete Project Plan & Architecture Guide
+From Idea → Architecture → How It Works → Build Strategy
+
+
+Upload any CSV  →  Ask in plain English  →  Get charts + AI insights
+
+
+Section 1 — Project Vision
+1.1  What Is This Project?
+The AI Data Analyst is a web application that lets any person — even someone with zero coding or statistics knowledge — upload a spreadsheet and get intelligent answers to questions about their data, with auto-generated charts and plain English explanations.
+
+Think of it as giving every user their own personal data scientist. Instead of needing Excel skills, SQL knowledge, or Python experience, the user simply types a question like "Which salesperson had the most deals last quarter?" and the system figures out the rest — reads the data, does the math, picks the right chart, and explains what it found.
+
+1.2  The Core Problem It Solves
+Most people have data — sales spreadsheets, survey results, inventory lists, customer records — but no easy way to get insights from it. Traditional tools require:
+Excel: Manual pivot tables, formulas, learning VLOOKUP
+SQL: Writing database queries, knowing syntax
+Python/R: Programming skills most people don't have
+Tableau/Power BI: Expensive, requires training
+
+This project removes all those barriers. The user's "interface" is natural language — the same way they would ask a colleague a question. The AI handles all the technical translation in the background.
+
+1.3  Who Would Use This?
+
+1.4  Why This Impresses Recruiters
+Most student projects are either: (a) a simple CRUD app with a database, or (b) a machine learning model in a Jupyter notebook. This project is neither. It demonstrates:
+
+Section 2 — How The App Works (User Journey)
+2.1  The Full User Experience
+This section walks through exactly what the user sees and does, from opening the app to getting their answer. Understanding this journey is critical before you start building — every feature decision flows from this.
+
+Step 1 — Landing Page
+When the user opens the app, they see a clean landing page. There is a large drag-and-drop zone in the center with the message 'Drop your CSV or Excel file here'. Below it are 3-4 example screenshots or descriptions of what the app can do. The purpose of this page is to immediately communicate the app's value and make the first action obvious.
+
+Step 2 — File Upload
+The user drags their spreadsheet file onto the drop zone, or clicks it to browse. The app accepts .csv and .xlsx files only. A loading spinner appears while the file is being read and processed. This takes about 1-2 seconds for most files.
+
+What happens behind the scenes: The file is sent to the backend. The backend reads it with Pandas, cleans column names, detects column types (numbers vs text vs dates), and computes statistics for every column. All of this is returned to the frontend as a structured JSON profile.
+
+Step 3 — Data Profile Screen
+After upload, the main dashboard appears. It has two parts:
+Data Preview Table: Shows the first 10 rows of the spreadsheet so the user can see what got loaded. Column headers are clickable to see stats for that column.
+Column Statistics Cards: For each column, a small card shows the column name, data type, number of unique values, number of missing values, and for number columns, the min/max/average.
+
+This screen serves two purposes: it confirms the upload worked correctly, and it gives the user context about their data before they start asking questions.
+
+Step 4 — Asking a Question
+Below the data profile is a large text input with the placeholder 'Ask anything about your data...' and an Analyze button. Below the input, 4-5 example questions are shown as clickable chips (based on the actual columns in the uploaded file). The user types their question and presses Enter or clicks Analyze.
+
+Step 5 — Processing
+A loading state appears. The question travels from the frontend to the backend. The backend builds a context-rich prompt for the Groq LLM. The LLM generates Python code to answer the question. The backend executes the code, gets the result, generates a chart, and generates an AI insight. All of this typically takes 2-4 seconds.
+
+Step 6 — Results Display
+The result appears as a new card below the query input. Each result card contains three things:
+An interactive Plotly chart — the user can hover for values, zoom in, download as PNG, or toggle data series
+An AI Insight paragraph — 2-3 sentences in plain English explaining what the chart shows, written specifically about the user's actual data and numbers
+A 'View Generated Code' collapsible section — optional transparency showing the exact Python/Pandas code that produced the result
+
+Step 7 — Query History
+Every question and its result is preserved in a scrollable history panel on the right side. The user can ask multiple questions in sequence, building up a mini-dashboard of insights. Each history item shows the question text and a small thumbnail of the chart.
+
+Step 8 — Export & Share
+Each chart has a download button to save it as a PNG image. A 'Export All Insights' button at the top can generate a simple PDF report with all the charts and insights from the session.
+
+2.2  What Questions Can It Answer?
+
+Section 3 — System Architecture
+3.1  The Big Picture
+The application is split into two completely separate codebases — a frontend and a backend — that talk to each other through a REST API. This is called a decoupled architecture, and it is the standard pattern used by all production web applications.
+
+The key insight: the frontend only ever knows about the API. It does not know that Python exists. The backend only ever knows about data and the LLM. It does not know what the UI looks like. This separation makes the system easier to test, debug, and extend.
+
+3.2  Architecture Diagram
+
+3.3  How The Two Sides Communicate
+The frontend and backend speak one language: JSON over HTTP. Here is what each API call looks like:
+
+
+The session ID is the glue between the two calls. When the user uploads a file, the backend stores the DataFrame in memory and gives it a unique ID. Every question the user asks later includes that ID so the backend knows which dataset to query.
+
+3.4  Why This Architecture Was Chosen
+
+Section 4 — The 5-Stage Data Pipeline
+When a user uploads a file and asks a question, the data goes through 5 distinct stages. Understanding this pipeline is the most important technical concept in the entire project. Every backend module maps to one stage.
+
+
+
+
+
+
+4.1  The Pipeline In A Single Diagram
+
+Section 5 — LLM Integration Deep Dive
+This section explains exactly how the AI portion of the app works. This is the part that most developers find intimidating, but it is actually straightforward once you understand what you are sending and why.
+
+5.1  The LLM's Job In This App
+The LLM in this project does two specific, narrow tasks. It is NOT asked to 'analyze the data' in a vague way. It is given precise, structured instructions each time:
+
+
+5.2  What Goes Into The Code Generation Prompt
+The quality of the LLM output depends entirely on the quality of the prompt. A vague prompt gives unpredictable code. A structured prompt gives reliable, executable code. Here is the anatomy of the code generation prompt:
+
+
+5.3  Why The Constraints Matter
+Each constraint in the prompt exists for a specific reason:
+
+5.4  What Happens If The LLM Gets It Wrong
+LLMs are not 100% reliable. Sometimes the generated code has a bug, uses a non-existent column name, or violates a constraint. The system handles this with three layers of protection:
+
+Safety Filter: Before execution, the code is checked for dangerous keywords: import, __, exec, eval, open, os, sys. If found, the request is rejected immediately with an error message to the user.
+Execution Try/Catch: The exec() call is wrapped in a try/except block. If the Pandas code throws any error (KeyError, AttributeError, etc.), the error is caught and a friendly message is returned to the user instead of a server crash.
+Retry Logic (optional enhancement): If the first attempt fails, the error message can be appended to a second prompt asking the LLM to fix its code. This self-healing pattern makes the system much more robust.
+
+5.5  The Insight Generation Prompt
+The second LLM call is simpler — it is given the actual data and asked to explain it:
+
+5.6  Temperature Settings Explained
+The Groq API accepts a 'temperature' parameter that controls how creative/random the output is. This project uses different temperatures for different tasks:
+
+Section 6 — Frontend Plan
+6.1  Frontend Architecture Overview
+The frontend is a Single Page Application (SPA) built with React and Vite. The entire app lives on one HTML page — navigation happens by showing and hiding components, not by loading new pages. Tailwind CSS provides all the styling using utility classes.
+
+6.2  Application State — What The App Needs To Remember
+Before writing any component, it helps to think about what information the app needs to track at any moment. This all lives in the root Dashboard component and gets passed down to children:
+
+6.3  Component Plan — Every Screen Element
+FileUpload Component
+This is the first thing the user sees. It must make the action completely obvious. Uses the react-dropzone library to handle drag-and-drop. Key behaviors:
+Shows a dashed border box with an upload icon and instruction text
+When a file is dragged over it, the border turns blue and the box highlights
+Only accepts .csv and .xlsx/.xls files — other file types are rejected with an error
+On successful drop, calls the uploadDataset API function and passes the response up to Dashboard
+Shows the filename and file size once accepted
+
+DataPreview Component
+Shown immediately after a successful upload. Gives the user confidence that their data loaded correctly. Two sub-sections:
+Table Preview: A scrollable HTML table showing the first 10 rows. Column headers show the column name and its data type (e.g., 'Region (text)' or 'Sales (number)'). Numbers are right-aligned.
+Column Stats Cards: A horizontal scrollable row of cards, one per column. Each card shows null count, unique count, and for number columns: min, max, and average. Click on a card to highlight that column in the preview table.
+
+QueryInput Component
+The core interaction element. Always visible once a dataset is loaded. Key behaviors:
+Large text input field with placeholder 'Ask anything about your data...'
+Pressing Enter submits the query (not just clicking the button)
+Disabled while a query is in progress (prevents duplicate requests)
+Example query chips below the input — 4-5 clickable buttons with suggested questions. These are ideally generated based on the actual column names in the uploaded dataset.
+Sends the question and session ID to the API, passes the result up to Dashboard
+
+ChartDisplay Component
+Renders the result of a single query. Each query produces one ChartDisplay card. Contains:
+Query text at the top in bold — so the user knows which question this answers
+Plotly chart filling the card width — interactive, with hover tooltips and a download button
+AI Insight box — a blue-tinted panel below the chart with the 2-3 sentence explanation
+Collapsible 'View Generated Code' section — shows the Pandas code in a monospace font. This is a transparency feature that also impresses technical reviewers.
+
+QueryHistory Component
+A sidebar or bottom panel showing all past questions asked in this session. Each history item shows:
+The question text (truncated if too long)
+A small timestamp
+A thumbnail of the chart
+Clicking a history item scrolls the main content to that chart
+
+LoadingSpinner Component
+A simple full-width centered spinner with a contextual message. Shows different messages depending on what stage is happening: 'Reading your file...' during upload, 'Analyzing your data...' during query, 'Generating chart...' during visualization.
+
+ErrorMessage Component
+A red dismissible banner shown when something goes wrong. The error message should be human-friendly, not a raw Python traceback. Examples: 'Could not find a column named Sales in your data. Try asking about one of these columns: Revenue, Amount, Total.'
+
+6.4  Routing Plan
+
+Section 7 — Backend Plan
+7.1  Backend Architecture Overview
+The backend is a Python FastAPI application. FastAPI is chosen because it is the fastest modern Python web framework, supports async operations natively, automatically generates API documentation at /docs, and uses Python type hints for automatic input validation.
+
+The backend is organized as a main entry point (main.py) and four specialized modules. Each module has a single, clear responsibility. They never depend on each other — they only depend on data.
+
+7.2  Module Plan — What Each File Does
+main.py — The Entry Point
+This file has three responsibilities: create the FastAPI application, configure CORS (Cross-Origin Resource Sharing — the security policy that lets the React app talk to this backend), and define the API routes. It does NOT contain any logic. It calls the modules to do the work and returns their responses.
+
+
+data_loader.py — Reading & Understanding the Data
+This module's job: take raw file bytes, produce a clean DataFrame and a complete profile. It runs once per upload. Key steps it performs:
+Parse the file: Pandas read_csv() or read_excel() depending on file extension
+Clean column names: strip whitespace, replace spaces with underscores
+Drop fully empty rows (rows where every column is null)
+Detect column type for each column: numeric, categorical (text), or datetime
+Compute statistics: for numeric columns: min, max, mean, std. For text columns: top 5 most common values.
+Count nulls and unique values per column
+Store the DataFrame in the session store with a new UUID
+Return the profile + first 10 rows as JSON
+
+What it does NOT do: It does not filter, aggregate, or transform the data. That is the query engine's job.
+
+session_store.py — Keeping The Data Alive
+The simplest module. It is just a Python dictionary at the module level: session_store = {}. When data_loader uploads a file, it adds an entry. When query_engine processes a question, it looks up the entry. The key is the session UUID, the value is the DataFrame and its profile.
+
+Important limitation: This is in-memory storage. If the FastAPI server restarts, all sessions are gone and users need to re-upload their files. For a portfolio project this is acceptable. For a real product, you would replace this with Redis or a database.
+
+query_engine.py — The Brain
+The most complex module. It orchestrates the entire query flow:
+Retrieves the DataFrame from the session store using the session ID
+Builds the prompt string by combining the column schema with the user's question
+Sends the prompt to Groq and receives the generated Pandas code
+Runs a safety check on the code (blocks dangerous keywords)
+Executes the code using Python's exec() function in a restricted namespace
+Captures the result variable from the executed code
+Calls visualization.py to turn the result into a chart
+Calls insight_engine.py to generate the plain-English explanation
+Packages everything into a response dictionary and returns it
+
+visualization.py — Picking The Right Chart
+Takes a result DataFrame and the user's question, and decides what chart to create. The logic uses two signals:
+Keyword detection in the question: words like 'trend', 'over time', 'monthly' → line chart. Words like 'distribution', 'spread' → histogram. Words like 'percentage', 'proportion', 'share' → pie chart. Words like 'correlation', 'vs' → scatter plot.
+Result shape analysis: If the result has one text column and one number column → bar chart (the safe default). If it has two number columns → scatter plot. If it has a column with date-like values → line chart.
+
+The chart is generated using Plotly Express, which produces a chart object that can be serialized to JSON. This JSON is sent to the frontend where react-plotly.js renders it as an interactive chart.
+
+insight_engine.py — Plain English Explanations
+A single function that takes the result data and the original question, then asks Groq to write a natural language explanation. The key to this module is including the actual numbers in the prompt — otherwise the LLM writes generic statements like 'the north region performed well' instead of 'the north region generated $1.245M in sales, which is 39% above the average.'
+
+7.3  Error Handling Strategy
+
+Section 8 — Complete Data Flow Trace
+This section traces a single query from the moment the user presses Enter to the moment the chart appears on screen. This is the most useful thing to understand when debugging.
+
+User's question: "Which product had the highest profit margin?"
+
+8.1  Frontend Side
+User types the question and presses Enter in QueryInput.
+QueryInput calls queryDataset(sessionId, question) from dataApi.js
+Axios sends POST request to /api/query with body: { session_id: 'abc-123', question: 'Which product had the highest profit margin?' }
+isLoading state is set to true — spinner appears, input is disabled
+Frontend waits for response...
+
+8.2  Network
+The HTTP request travels from port 5173 (React dev server) to port 8000 (FastAPI)
+In development, Vite's proxy intercepts the /api/query call and forwards it to localhost:8000
+In production, the React app is on Vercel and calls the Railway backend URL directly
+
+8.3  Backend Side — query_engine.py
+FastAPI receives the POST /api/query request
+Pydantic validates the request body — checks session_id is a string, question is a string
+session_store['abc-123'] is looked up — the DataFrame is retrieved from memory
+build_prompt() constructs the LLM prompt with column schema + sample values + user question
+Groq API call: POST to api.groq.com with the prompt. Takes ~0.5-1 second.
+LLM returns: result = df.groupby('Product')['Profit_Margin'].mean().idxmax()
+Safety check: no dangerous keywords found
+exec() runs the code: executes groupby + mean + idxmax on the DataFrame
+result = 'Premium Widget' (a string — the product name with highest average margin)
+
+generate_chart() is called with result='Premium Widget' and question text
+Since result is a single string, visualization.py returns a simple text card rather than a chart. It re-queries the LLM for a bar chart of all products' margins instead.
+
+generate_insight() is called with the result data and question
+Second Groq call returns: 'Premium Widget achieved the highest average profit margin at 34.2%, significantly outperforming the next closest product (Standard Widget at 21.8%). This 12.4 point gap suggests Premium Widget's pricing strategy is more effective relative to its production costs.'
+Response object is assembled: { chart_json: {...}, insight: '...', generated_code: '...' }
+FastAPI returns HTTP 200 with the JSON response
+
+8.4  Frontend Side — Receiving The Result
+Axios receives the HTTP 200 response
+isLoading is set to false — spinner disappears, input is re-enabled
+handleQueryResult() is called with the result object
+New result is prepended to the results array: setResults(prev => [result, ...prev])
+React re-renders Dashboard — a new ChartDisplay card appears at the top of the results list
+Plotly renders the chart from chart_json
+AI insight text appears in the blue panel below the chart
+The question is added to QueryHistory
+
+Section 9 — Tech Stack Decisions
+Every technology choice in this stack was deliberate. This section explains the 'why' — which you need to know for interview questions.
+
+9.1  Frontend Stack
+React (not plain HTML/JS)
+React is chosen because the UI has multiple interactive components that need to share state (the session ID must be known by both QueryInput and ChartDisplay). React's component model and state management (useState) handle this cleanly. Alternatives like Vue.js would also work, but React has the largest job market demand.
+
+Vite (not Create React App)
+Vite is the modern replacement for Create React App. It starts the development server in under 1 second (CRA takes 10-30 seconds), uses native ES modules for instant hot reload, and produces optimized production builds. All new React projects use Vite.
+
+Tailwind CSS (not regular CSS)
+Tailwind provides utility classes like 'bg-blue-500', 'flex', 'rounded-xl' that are applied directly in the HTML. This eliminates the need to write CSS files. The downside is that class names can get long — but for a portfolio project, it is the fastest way to produce a polished-looking UI.
+
+Axios (not fetch)
+Both work. Axios is preferred because it automatically serializes JSON request/response bodies, has cleaner error handling (errors from all HTTP status codes are catchable), and the interceptor pattern makes it easy to add auth headers later.
+
+9.2  Backend Stack
+FastAPI (not Flask or Django)
+
+Pandas (not SQL)
+The data lives in memory as a Pandas DataFrame. SQL would require setting up a database, inserting the CSV data, writing queries, and managing connections. Pandas is simpler for this use case — the data is temporary, one file at a time, and Pandas is what the LLM is best trained to write code for.
+
+Groq (not OpenAI)
+
+Plotly (not Chart.js or Recharts)
+Plotly is chosen specifically because it can be used on both sides: the Python backend generates the chart JSON using plotly Python library, and the React frontend renders it using react-plotly.js. This means the chart type and configuration is decided on the server, not the client. Chart.js and Recharts are frontend-only libraries.
+
+Section 10 — Feature Roadmap
+10.1  Core Features (Build These First — MVP)
+
+10.2  Advanced Features (Add After Core Works)
+
+10.3  Future / Production Features (Mention In Interviews)
+
+Section 11 — Challenges & How To Handle Them
+These are the real problems you will encounter while building this project. Knowing them in advance saves hours of debugging.
+
+
+
+
+
+
+Section 12 — 10-Day Build Plan
+A realistic, day-by-day plan that builds the project incrementally. Each day ends with something you can see or test. Never skip a day's verification — if something does not work, fix it before moving on.
+
+
+Section 13 — Resume & Interview Strategy
+13.1  Resume Description
+
+13.2  How To Talk About It In An Interview
+The best way to introduce this project in an interview is to lead with the problem it solves, not the technology:
+
+
+13.3  Expected Interview Questions & Answers
+
+13.4  Things To Prepare Before Interviews
+Live demo ready: Have the deployed URL open and a sample CSV ready to upload. Nothing impresses like showing it working in real time.
+GitHub repo clean: Delete any debug print statements, add a clear README with architecture diagram, and make sure the code is organized as described in this document.
+Architecture diagram ready: Draw it in Excalidraw (free, at excalidraw.com) and save as PNG. Include in README and be ready to screen-share it.
+Know your numbers: How many rows can it handle? How long does a query take? What is the accuracy of the LLM code generation? Have rough answers ready.
+Know the limitations: In-memory sessions, no auth, exec() safety caveats. Being upfront about limitations and stating how you'd fix them shows maturity.
+
+The goal is not just to build it — it's to understand every decision you made and why.
+
+When you can explain this project from user need to architecture to deployment, that's when you're ready.

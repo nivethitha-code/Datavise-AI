@@ -1,0 +1,52 @@
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDEs and Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*.sublime-project
+*.sublime-workspace
+
+# Frontend
+node_modules/
+dist/
+dist-ssr/
+*.local
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Backend
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+ENV/
+.venv/
+pip-log.txt
+pip-delete-this-directory.txt
+.toast
+.build
+.pytest_cache/
+.coverage
+htmlcov/
+*.db
+*.sqlite
+
+# Project Specific
+.env
+*.log
+diag_out.txt
+init_out.txt
+init_report.txt
+backend/init_out.txt
+backend/diag_out.txt
+backend/init_report.txt
