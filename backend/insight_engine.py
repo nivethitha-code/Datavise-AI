@@ -2,6 +2,8 @@ from groq import Groq
 import pandas as pd
 
 import os
+from dotenv import load_dotenv
+load_dotenv()
 
 # Lazy initialization
 def get_groq_client():

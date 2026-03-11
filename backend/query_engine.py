@@ -6,9 +6,10 @@ query_engine.py – Agentic Query Engine with:
 """
 
 import os
+from dotenv import load_dotenv
+load_dotenv()
 import pandas as pd
 from groq import Groq
-from dotenv import load_dotenv
 
 import data_loader
 import visualization
