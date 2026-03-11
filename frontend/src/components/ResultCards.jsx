@@ -48,7 +48,7 @@ const Typewriter = ({ text }) => {
     );
 };
 
-const ResultCards = ({ result, isMinimal = false }) => {
+const ResultCards = ({ result, isMinimal = false, isVisualizationBoard = false }) => {
     const [showCode, setShowCode] = useState(false);
 
     // Fallback styling if frontend theme detection needs it
@@ -75,37 +75,53 @@ const ResultCards = ({ result, isMinimal = false }) => {
             {/* Main Content - Chart or Text Result */}
             <div className={isMinimal ? "space-y-4" : "p-6"}>
                 {/* Result (Chart or Raw Data) */}
-                {result.chart_json ? (
-                    <div className={`w-full bg-white dark:bg-deep-950/40 rounded-xl overflow-hidden border border-slate-200 dark:border-deep-800 flex justify-center ${isMinimal ? 'shadow-sm' : 'mb-6 shadow-inner'}`}>
-                        <Plot
-                            data={result.chart_json.data}
-                            layout={{
-                                ...result.chart_json.layout,
-                                autosize: true,
-                                paper_bgcolor: 'transparent',
-                                plot_bgcolor: 'transparent',
-                                font: {
-                                    family: 'Inter, system-ui, sans-serif',
-                                    color: isDark ? '#f1f5f9' : '#1e293b'
-                                },
-                                margin: isMinimal ? { t: 10, r: 10, b: 30, l: 30 } : { t: 40, r: 20, b: 40, l: 40 },
-                                height: isMinimal ? 280 : undefined
-                            }}
-                            useResizeHandler={true}
-                            style={{ width: '100%', minHeight: isMinimal ? '280px' : '400px' }}
-                            config={{ displayModeBar: !isMinimal, responsive: true }}
-                        />
-                    </div>
-                ) : (
-                    <div className={`bg-slate-50 dark:bg-deep-800/40 rounded-xl text-center border border-slate-200 dark:border-deep-800 ${isMinimal ? 'p-4' : 'p-8 mb-6'}`}>
-                        <p className={`${isMinimal ? 'text-lg' : 'text-2xl'} font-semibold font-mono text-slate-800 dark:text-slate-200`}>
-                            {result.raw_result || "No visualizable data returned."}
-                        </p>
-                    </div>
-                )}
+                {(() => {
+                    let parsedChart = null;
+                    if (result.chart_json) {
+                        try {
+                            parsedChart = typeof result.chart_json === 'string'
+                                ? JSON.parse(result.chart_json)
+                                : result.chart_json;
+                        } catch (e) {
+                            console.error("Failed to parse chart json:", e);
+                        }
+                    }
+
+                    // A valid Plotly chart MUST have a data array
+                    let isValidChart = parsedChart && Array.isArray(parsedChart.data);
+
+                    return isValidChart ? (
+                        <div className={`w-full bg-white dark:bg-deep-950/40 rounded-xl overflow-hidden border border-slate-200 dark:border-deep-800 flex justify-center ${isMinimal ? 'shadow-sm' : 'mb-6 shadow-inner'}`}>
+                            <Plot
+                                data={parsedChart.data}
+                                layout={{
+                                    ...(parsedChart.layout || {}),
+                                    autosize: true,
+                                    paper_bgcolor: 'transparent',
+                                    plot_bgcolor: 'transparent',
+                                    font: {
+                                        family: 'Inter, system-ui, sans-serif',
+                                        color: isDark ? '#f1f5f9' : '#1e293b'
+                                    },
+                                    margin: isMinimal ? { t: 10, r: 10, b: 30, l: 30 } : { t: 40, r: 20, b: 40, l: 40 },
+                                    height: isMinimal ? 280 : undefined
+                                }}
+                                useResizeHandler={true}
+                                style={{ width: '100%', minHeight: isMinimal ? '280px' : '400px' }}
+                                config={{ displayModeBar: !isMinimal, responsive: true }}
+                            />
+                        </div>
+                    ) : (
+                        <div className={`bg-slate-50 dark:bg-deep-800/40 rounded-xl text-center border border-slate-200 dark:border-deep-800 ${isMinimal ? 'p-4' : 'p-8 mb-6'}`}>
+                            <p className={`${isMinimal ? 'text-lg' : 'text-2xl'} font-semibold font-mono text-slate-800 dark:text-slate-200 whitespace-pre-wrap`}>
+                                {result.raw_result || (parsedChart ? JSON.stringify(parsedChart, null, 2) : "No visualizable data returned.")}
+                            </p>
+                        </div>
+                    );
+                })()}
 
                 {/* AI Insight Box - Back to the Bottom */}
-                {result.insight && (
+                {result.insight && !isVisualizationBoard && (
                     <div className={`${isMinimal ? 'p-3 rounded-xl bg-brand-50 dark:bg-brand-900/10 border border-brand-100 dark:border-brand-500/20' : 'bg-gradient-to-r from-brand-50 to-fuchsia-50 dark:from-brand-900/10 dark:to-fuchsia-900/10 border border-brand-100 dark:border-brand-500/20 rounded-2xl p-6 shadow-sm'} relative overflow-hidden flex items-start space-x-3`}>
                         {!isMinimal && <div className="absolute top-0 right-0 w-32 h-32 bg-brand-500/5 blur-3xl rounded-full"></div>}
                         <Bot className={`${isMinimal ? 'w-5 h-5' : 'w-8 h-8'} text-brand-600 dark:text-brand-400 mt-0.5 flex-shrink-0`} />
@@ -122,7 +138,7 @@ const ResultCards = ({ result, isMinimal = false }) => {
             </div>
 
             {/* Collapsible Code Section (Only in Full mode or hidden in Minimal) */}
-            {!isMinimal && (
+            {!isMinimal && !isVisualizationBoard && (
                 <div className="border-t border-slate-100 dark:border-deep-800">
                     <button
                         onClick={() => setShowCode(!showCode)}

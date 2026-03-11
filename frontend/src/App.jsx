@@ -6,6 +6,7 @@ import FileUpload from './components/FileUpload';
 import DataPreview from './components/DataPreview';
 import ChatInterface from './components/ChatInterface';
 import LoadingSpinner from './components/LoadingSpinner';
+import ResultCards from './components/ResultCards';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
@@ -19,6 +20,7 @@ function App() {
   const [error, setError] = useState(null);
   const [theme, setTheme] = useState(localStorage.getItem('theme') || 'dark');
   const [isChatOpen, setIsChatOpen] = useState(false);
+  const [viewMode, setViewMode] = useState('dashboard'); // 'dashboard' or 'viz'
 
   // ── Theme ─────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -66,9 +68,20 @@ function App() {
     setSessionId(data.session_id);
     setProfile(data.profile);
     setPreviewData(data.preview);
-    setResults([]);
+
+    // Automatically populate results with the 3 starter dashboard analyses
+    if (data.automated_analysis) {
+      setResults(data.automated_analysis.map((res, i) => ({
+        ...res,
+        id: `starter-${i}`,
+        is_automated: true
+      })));
+      setIsChatOpen(true); // Open assistant to show the dashboard
+    } else {
+      setResults([]);
+    }
+
     setError(null);
-    // Persist session_id in URL so page refresh can restore it
     window.history.replaceState({}, '', `?session=${data.session_id}`);
   };
 
@@ -106,6 +119,25 @@ function App() {
     }
   };
 
+  // ── Helper to safely get results that have VALID charts ──────────────────
+  const getChartResults = () => {
+    return results.filter(r => {
+      // Always show starter dashboard items in the Viz tab, even if they failed to generate a chart
+      if (r.is_automated) return true;
+
+      // For user queries, only show them in the Viz tab if they actually produced a chart
+      if (!r.chart_json) return false;
+      try {
+        const parsed = typeof r.chart_json === 'string' ? JSON.parse(r.chart_json) : r.chart_json;
+        return parsed && Array.isArray(parsed.data) && parsed.data.length > 0;
+      } catch {
+        return false;
+      }
+    });
+  };
+
+  const chartResults = getChartResults();
+
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-deep-950 text-slate-900 dark:text-slate-100 transition-colors duration-500 overflow-x-hidden">
 
@@ -113,24 +145,42 @@ function App() {
       <nav className="sticky top-0 z-50 w-full glass-panel dark:glass-dark border-b border-slate-200 dark:border-deep-800">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center h-16">
-            <div className="flex items-center space-x-3">
-              <div className="bg-brand-500 p-2 rounded-xl text-white shadow-lg shadow-brand-500/30">
-                <BarChart3 className="w-6 h-6" />
+            <div className="flex items-center space-x-6">
+              <div className="flex items-center space-x-3">
+                <div className="bg-brand-500 p-2 rounded-xl text-white shadow-lg shadow-brand-500/30">
+                  <BarChart3 className="w-6 h-6" />
+                </div>
+                <span className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-brand-500 to-fuchsia-500 dark:from-brand-400 dark:to-fuchsia-400">
+                  AI Data Analyst
+                </span>
               </div>
-              <span className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-brand-500 to-fuchsia-500 dark:from-brand-400 dark:to-fuchsia-400">
-                AI Data Analyst
-              </span>
+
+              {sessionId && (
+                <div className="hidden md:flex items-center space-x-1">
+                  <button
+                    onClick={() => setViewMode('dashboard')}
+                    className={`px-4 py-2 text-sm font-bold rounded-xl transition-all ${viewMode === 'dashboard' ? 'text-brand-500 bg-brand-500/10' : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 hover:bg-slate-100 dark:hover:bg-deep-800'}`}
+                  >
+                    Dashboard
+                  </button>
+                  <button
+                    onClick={() => setViewMode('viz')}
+                    className={`px-4 py-2 text-sm font-bold rounded-xl transition-all ${viewMode === 'viz' ? 'text-brand-500 bg-brand-500/10' : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 hover:bg-slate-100 dark:hover:bg-deep-800'}`}
+                  >
+                    Visualization
+                  </button>
+                </div>
+              )}
             </div>
 
             <div className="flex items-center gap-3">
               {sessionId && (
-                <button 
+                <button
                   onClick={() => setIsChatOpen(!isChatOpen)}
-                  className={`flex items-center gap-1.5 text-xs font-bold px-4 py-2 rounded-xl transition-all border ${
-                    isChatOpen 
-                      ? 'bg-brand-500 text-white border-brand-400 shadow-lg shadow-brand-500/30' 
-                      : 'bg-white dark:bg-deep-800 text-slate-700 dark:text-slate-200 border-slate-200 dark:border-deep-700'
-                  }`}
+                  className={`flex items-center gap-1.5 text-xs font-bold px-4 py-2 rounded-xl transition-all border ${isChatOpen
+                    ? 'bg-brand-500 text-white border-brand-400 shadow-lg shadow-brand-500/30'
+                    : 'bg-white dark:bg-deep-800 text-slate-700 dark:text-slate-200 border-slate-200 dark:border-deep-700'
+                    }`}
                 >
                   <Database className="w-4 h-4" />
                   {isChatOpen ? 'Close Assistant' : 'AI Assistant'}
@@ -149,14 +199,14 @@ function App() {
 
       <div className="flex relative h-[calc(100vh-64px)] overflow-hidden">
         {/* ── Main Content Area ─────────────────────────────────────────────── */}
-        <motion.main 
+        <motion.main
           initial={false}
-          animate={{ 
+          animate={{
             width: isChatOpen ? 'calc(100% - 460px)' : '100%',
             opacity: 1
           }}
           transition={{ type: 'spring', damping: 25, stiffness: 200 }}
-          className="flex-1 px-4 sm:px-6 lg:px-8 py-8 space-y-8 min-w-0"
+          className="flex-1 px-4 sm:px-6 lg:px-8 py-8 space-y-8 min-w-0 overflow-y-auto"
         >
 
           {/* ── Error Banner ──────────────────────────────────────────────────── */}
@@ -176,7 +226,7 @@ function App() {
 
           {/* ── Loading Overlay ───────────────────────────────────────────────── */}
           <AnimatePresence>
-            {isLoading && loadingMessage !== 'Analyzing data and writing code...' && (
+            {isLoading && (!sessionId || loadingMessage === 'Restoring your previous session...') && (
               <LoadingSpinner message={loadingMessage} />
             )}
           </AnimatePresence>
@@ -196,8 +246,47 @@ function App() {
               />
             </motion.div>
           ) : (
-            <div className="max-w-5xl mx-auto space-y-8">
-              <DataPreview profile={profile} previewData={previewData} />
+            <div className="max-w-7xl mx-auto">
+              <AnimatePresence mode="wait">
+                {viewMode === 'dashboard' ? (
+                  <motion.div
+                    key="dashboard"
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -20 }}
+                    className="space-y-8"
+                  >
+                    <DataPreview profile={profile} previewData={previewData} />
+                  </motion.div>
+                ) : (
+                  <motion.div
+                    key="viz"
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -20 }}
+                    className="space-y-6"
+                  >
+                    <div className="flex flex-col space-y-2 mb-8 text-center">
+                      <h2 className="text-3xl font-extrabold tracking-tight">Visualization Board</h2>
+                      <p className="text-slate-500 dark:text-slate-400">All charts generated during this session.</p>
+                    </div>
+
+                     {chartResults.length > 0 ? (
+                      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 pb-20">
+                        {chartResults.map((res) => (
+                          <ResultCards key={res.id} result={res} isVisualizationBoard={true} />
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="flex flex-col items-center justify-center py-20 text-center opacity-50">
+                        <BarChart3 className="w-16 h-16 mb-4" />
+                        <p className="text-lg font-medium">No charts have been generated yet.</p>
+                        <p className="text-sm">Ask the assistant to visualize data to see icons here.</p>
+                      </div>
+                    )}
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </div>
           )}
         </motion.main>
@@ -211,6 +300,7 @@ function App() {
           onError={handleError}
           isLoading={isLoading}
           setIsLoading={setIsLoading}
+          loadingMessage={loadingMessage}
           setLoadingMessage={setLoadingMessage}
           onHistoryLoaded={handleHistoryLoaded}
           isOpen={isChatOpen}

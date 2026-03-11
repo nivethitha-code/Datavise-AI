@@ -70,20 +70,75 @@ const QueryInterface = ({
         if (!q || isLoading) return;
 
         setIsLoading(true);
-        setLoadingMessage('Analyzing data and writing code...');
+        setLoadingMessage('Initializing analysis...');
+        setQuery('');
 
         try {
-            const response = await axios.post(`${API_URL}/api/query`, {
-                session_id: sessionId,
-                question: q,
+            const response = await fetch(`${API_URL}/api/query`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ session_id: sessionId, question: q }),
             });
-            onResult({ question: q, ...response.data });
-            setQuery('');
+
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let finalData = null;
+
+            let buffer = '';
+            while (true) {
+                const { value, done } = await reader.read();
+                
+                if (value) {
+                    buffer += decoder.decode(value, { stream: !done });
+                    const parts = buffer.split('\n\n');
+                    
+                    // Keep the last (potentially partial) part in the buffer
+                    buffer = parts.pop() || '';
+
+                    for (const part of parts) {
+                        const trimmedPart = part.trim();
+                        if (!trimmedPart || !trimmedPart.startsWith('data: ')) continue;
+                        
+                        try {
+                            const data = JSON.parse(trimmedPart.replace('data: ', ''));
+                            if (data.status) {
+                                setLoadingMessage(data.status);
+                            } else if (data.final_result) {
+                                finalData = data.final_result;
+                            } else if (data.error) {
+                                throw new Error(data.error);
+                            }
+                        } catch (e) {
+                            console.error('Error parsing stream part:', e, trimmedPart);
+                        }
+                    }
+                }
+                
+                if (done) {
+                    // Process any remaining data in the buffer after stream ends
+                    if (buffer && buffer.trim().startsWith('data: ')) {
+                        try {
+                            const data = JSON.parse(buffer.trim().replace('data: ', ''));
+                            if (data.final_result) finalData = data.final_result;
+                        } catch (e) {
+                            console.error('Final buffer parse error:', e);
+                        }
+                    }
+                    break;
+                }
+            }
+
+            if (finalData) {
+                onResult({ question: q, ...finalData });
+            } else {
+                onError("The analyst finished without a conclusion. This might be a connection issue or a backend skip.");
+            }
             inputRef.current?.focus();
         } catch (err) {
-            onError(err.response?.data?.detail || 'Failed to analyze data. Please try again.');
+            onError(err.message || 'Failed to analyze data. Please try again.');
         } finally {
             setIsLoading(false);
+            setLoadingMessage('');
         }
     };
 

@@ -2,17 +2,19 @@ from fastapi import APIRouter, HTTPException
 import query_engine
 from schemas.query import QueryRequest, SuggestionsRequest
 
-router = APIRouter(prefix="/api", tags=["query"])
+router = APIRouter(tags=["query"])
+
+import json
+from fastapi.responses import StreamingResponse
 
 @router.post("/query")
 async def query_data(request: QueryRequest):
-    try:
-        result = query_engine.execute_query(request.session_id, request.question)
-        return result
-    except ValueError as ve:
-        raise HTTPException(status_code=400, detail=str(ve))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+    def event_generator():
+        for chunk in query_engine.execute_query_stream(request.session_id, request.question):
+            # Yield as valid SSE or just raw JSON lines
+            yield f"data: {json.dumps(chunk)}\n\n"
+    
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 @router.post("/generate-suggestions")
 async def generate_suggestions(request: SuggestionsRequest):

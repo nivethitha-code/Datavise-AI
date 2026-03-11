@@ -28,6 +28,7 @@ _patch_httpx_init(httpx.AsyncClient)
 # ──────────────────────────────────────────────────────────────────────────────────
 
 from supabase import create_client, Client
+from supabase.lib.client_options import ClientOptions
 from models import TABLES_SQL
 
 load_dotenv()
@@ -41,7 +42,10 @@ def get_supabase() -> Client:
         key = os.environ.get("SUPABASE_KEY")
         if not url or not key:
             raise RuntimeError("SUPABASE_URL and SUPABASE_KEY must be set in your .env file.")
-        _supabase = create_client(url, key)
+        
+        # Configure client to use the ai_analyst schema
+        opts = ClientOptions(schema="ai_analyst")
+        _supabase = create_client(url, key, options=opts)
     return _supabase
 
 def init_db():

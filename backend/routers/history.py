@@ -3,7 +3,7 @@ import numpy as np
 import data_loader
 import query_engine
 
-router = APIRouter(prefix="/api", tags=["history"])
+router = APIRouter(tags=["history"])
 
 @router.get("/history/{session_id}")
 async def get_history(session_id: str):

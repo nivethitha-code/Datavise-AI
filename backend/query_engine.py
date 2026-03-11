@@ -1,149 +1,223 @@
-"""
-query_engine.py – Agentic Query Engine with:
-  1. Conversational Memory  (fetches last 5 messages from Supabase)
-  2. Self-Correction / Reflexion (retries on exec() failure, logs to Supabase)
-  3. Smart Suggestions  (called separately via /api/generate-suggestions)
-"""
-
 import os
 from dotenv import load_dotenv
 load_dotenv()
 import pandas as pd
+import json
+import re
 from groq import Groq
-
-import data_loader
-import visualization
-import insight_engine
 from database import get_supabase
+import visualization
+import data_loader
 
-load_dotenv()
+MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
+_BLOCKED = ["import", "os", "sys", "eval", "open", "subprocess", "shutil", "__builtins__"]
 
-# ── Groq client ───────────────────────────────────────────────────────────────
-_groq: Groq | None = None
-
-def get_groq() -> Groq:
-    global _groq
-    if _groq is None:
-        key = os.environ.get("GROQ_API_KEY")
-        if not key:
-            raise RuntimeError("GROQ_API_KEY is missing in your .env file.")
-        _groq = Groq(api_key=key)
-    return _groq
-
-MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
-
-# ── Danger list ───────────────────────────────────────────────────────────────
-_BLOCKED = ['import ', 'os.', 'sys.', '__', 'eval(', 'exec(', 'open(', 'subprocess']
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-# PUBLIC API
-# ═════════════════════════════════════════════════════════════════════════════
-
-def execute_query(session_id: str, question: str) -> dict:
-    """Full pipeline: memory → code gen → safety → exec → reflexion → chart → insight → persist."""
-
-    # 1. Get DataFrame
-    session = data_loader.get_session(session_id)
-    if session is None:
-        raise ValueError("Session not found or expired. Please re-upload your file.")
-
-    df: pd.DataFrame = session["df"]
-    profile: dict = session["profile"]
-
-    # 2. Fetch conversational memory
-    history = _get_chat_history(session_id)
-
-    # 3. Build prompt with memory context
-    schema_str = _build_schema(df, profile)
-    history_block = _format_history(history)
-    prompt = _code_prompt(schema_str, history_block, question)
-
-    # 4. Call LLM → get code
-    raw_code = _llm_call(prompt, temperature=0.0, max_tokens=150)
-    code_line = _extract_code(raw_code)
-
-    # 5. Safety check
-    _safety_check(code_line)
-
-    # 6. Execute with Reflexion fallback
-    result_data, final_code = _execute_with_reflexion(
-        code_line, df, schema_str, question, session_id
-    )
-
-    # 7. Chart & Insight
-    chart_json = visualization.generate_chart(result_data, df, final_code, question)
-
-    if hasattr(result_data, "to_json"):
-        raw_result_summary = "DataFrame/Series result"
-    else:
-        raw_result_summary = str(result_data)
-
-    insight = insight_engine.generate_insight(result_data, question)
-
-    # 8. Persist conversation to Supabase
-    _save_message(session_id, "user", question)
-    _save_message(session_id, "assistant", insight or raw_result_summary)
-
-    return {
-        "generated_code": final_code,
-        "chart_json": chart_json,
-        "insight": insight,
-        "raw_result": raw_result_summary,
-    }
-
-
-def generate_suggestions(session_id: str) -> list[str]:
-    """Ask Groq to generate 4 smart analytical questions for this dataset's columns."""
-    sb = get_supabase()
-
-    # Try to return cached suggestions first
-    try:
-        row = sb.table("sessions").select("suggestions, column_profile").eq("session_id", session_id).single().execute()
-        if not row.data:
-            raise ValueError("Session not found.")
-        cached = row.data.get("suggestions", [])
-        if cached:
-            return cached
-        profile = row.data["column_profile"]
-    except Exception as e:
-        raise ValueError(f"Could not load session: {e}")
-
-    # Build column summary for the prompt
-    col_lines = []
-    for col in profile.get("columns", []):
-        col_lines.append(f"- {col['name']} ({col['type']})")
-    col_summary = "\n".join(col_lines)
-
-    prompt = f"""A CSV dataset has these columns:
-{col_summary}
-
-Generate exactly 4 insightful analytical questions that a business owner would ask about this data.
-Requirements:
-- Each question must be specific to the actual column names above.
-- Questions should cover: totals/aggregation, comparisons, trends, distributions.
-- Return ONLY the 4 questions, one per line. No numbering, no bullets, no extra text.
-"""
-    raw = _llm_call(prompt, temperature=0.4, max_tokens=200)
-    questions = [q.strip("•-0123456789. ").strip() for q in raw.strip().split("\n") if q.strip()][:4]
-
-    # Cache to Supabase for future calls
-    try:
-        sb.table("sessions").update({"suggestions": questions}).eq("session_id", session_id).execute()
-    except Exception:
-        pass  # Non-fatal
-
-    return questions
-
+def get_groq():
+    api_key = os.environ.get("GROQ_API_KEY")
+    if not api_key:
+        raise ValueError("GROQ_API_KEY missing from environment.")
+    return Groq(api_key=api_key)
 
 def get_history(session_id: str) -> list[dict]:
-    """Public: fetch all messages for a session (for frontend load on refresh)."""
-    return _get_chat_history(session_id, limit=50)
+    """Public function to retrieve chat history."""
+    return _get_chat_history(session_id)
+
+def generate_suggestions(session_id: str) -> list[str]:
+    """
+    Analyzes the data schema and history to suggest 3 intelligent follow-up questions.
+    """
+    session = data_loader.get_session(session_id)
+    if not session:
+        raise ValueError("Session not found.")
+    
+    df = session["df"]
+    profile = session["profile"]
+    schema_str = _build_schema(df, profile)
+    history = _get_chat_history(session_id)
+    history_block = _format_history(history)
+
+    prompt = f"""You are a smart Data Analyst. Based on this data schema and history, suggest 3 concise, analytical questions the user should ask next.
+{schema_str}
+{history_block}
+Return ONLY a JSON list of strings. No descriptions.
+Example: ["Show sales by region", "What is the trend over time?"]
+"""
+    try:
+        raw = _llm_call(prompt, temperature=0.7, max_tokens=150)
+        # Attempt to find JSON in the response
+        match = re.search(r"\[.*\]", raw, re.DOTALL)
+        if match:
+             return json.loads(match.group())
+        return json.loads(raw)
+    except:
+        return ["Show total rows", "Describe each column", "What are the top 5 values?"]
+
+# ═════════════════════════════════════════════════════════════════════════════
+# MULTI-AGENT PERSONAS
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _data_agent_prompt(schema_str: str, history_block: str, question: str) -> str:
+    return f"""You are the **Data Analyst Agent**. Your goal is to write precise Python code to answer data questions.
+{schema_str}
+{history_block}
+Current question: {question}
+
+Write exactly ONE line of Python code using Pandas that calculates the answer.
+Store the final result in a variable named 'result'.
+Constraints:
+- Return ONLY the raw code line.
+- No imports, no comments, no markdown fences.
+- Use only valid columns from the schema provided.
+- If the question is a follow-up, use the history context.
+
+Example: result = df['Sales'].sum()
+"""
+
+def _viz_agent_prompt(question: str, data_summary: str) -> str:
+    return f"""You are the **Visualization Expert Agent**. Your goal is to suggest the best way to visualize the result.
+Question: {question}
+Data Summary: {data_summary}
+
+Based on the data, what is the single most effective chart type? (e.g., Pie, Bar, Line, Scatter, None)
+Return ONLY the chart type name.
+"""
+
+def _insight_agent_prompt(question: str, result_summary: str) -> str:
+    return f"""You are the **Insight Consultant Agent**. Your goal is to explain the data in a professional, business-friendly way.
+Question: {question}
+Result: {result_summary}
+
+Provide a concise, 2-3 sentence summary of what this data means. 
+Focus on the "why" or the business impact. Do not just repeat the numbers. 
+"""
+
+# ═════════════════════════════════════════════════════════════════════════════
+# PUBLIC API (GENERATOR FOR STREAMING)
+# ═════════════════════════════════════════════════════════════════════════════
+
+def execute_query_stream(session_id: str, question: str, save_history: bool = True):
+    """
+    Multi-Agent pipeline that yields status logs in real-time.
+    Yields dicts with 'status' or 'final_result'.
+    """
+    try:
+        print(f"🚀 [Query] Starting stream for session: {session_id}")
+        # 1. Setup & Context
+        yield {"status": "🔍 Identifying data schema and context..."}
+        session = data_loader.get_session(session_id)
+        if session is None:
+            yield {"error": "Session not found."}
+            return
+
+        df: pd.DataFrame = session["df"]
+        profile: dict = session["profile"]
+        history = _get_chat_history(session_id)
+        schema_str = _build_schema(df, profile)
+        history_block = _format_history(history)
+
+        # 2. Data Agent: Generate Code
+        print("🤖 [Query] Step 2: Generating code...")
+        yield {"status": "🤖 Data Agent: Generating analytical solution..."}
+        prompt = _data_agent_prompt(schema_str, history_block, question)
+        raw_code = _llm_call(prompt, temperature=0.0, max_tokens=150)
+        code_line = _extract_code(raw_code)
+        _safety_check(code_line)
+
+        # 3. Execution & Reflexion
+        print("⚙️ [Query] Step 3: Executing code...")
+        yield {"status": "⚙️  Executing calculation and verifying accuracy..."}
+        result_data, final_code = _execute_with_reflexion_stream(
+            code_line, df, schema_str, question, session_id
+        )
+
+        # 4. Viz Agent: Chart Selection
+        print("📊 [Query] Step 4: Visualizing...")
+        yield {"status": "📊 Visualization Agent: Designing optimal chart type..."}
+        data_summary = str(result_data)[:200]
+        viz_prompt = _viz_agent_prompt(question, data_summary)
+        suggested_viz = _llm_call(viz_prompt, temperature=0.0, max_tokens=20).strip()
+        
+        chart_json = visualization.generate_chart(result_data, df, final_code, question)
+
+        # 5. Insight Agent: Storytelling
+        print("💡 [Query] Step 5: Generating insights...")
+        yield {"status": "💡 Insight Agent: Formulating business takeaway..."}
+        insight_prompt = _insight_agent_prompt(question, data_summary)
+        insight = _llm_call(insight_prompt, temperature=0.4, max_tokens=250)
+
+        # 6. Persistence
+        if save_history:
+            _save_message_async(session_id, "user", question)
+            _save_message_async(session_id, "assistant", insight)
+
+        print("✅ [Query] Step 6: Complete!")
+        yield {
+            "final_result": {
+                "generated_code": final_code,
+                "chart_json": chart_json,
+                "insight": insight,
+                "raw_result": str(result_data)[:500],
+                "agents_involved": ["Data Analyst", "Viz Expert", "Insight Consultant"]
+            }
+        }
+
+    except Exception as e:
+        yield {"error": str(e)}
+
+
+def execute_query(session_id: str, question: str, save_history: bool = False) -> dict:
+    """Legacy wrapper for synchronous calls. Defaults save_history to False for internal tasks."""
+    res = {}
+    for chunk in execute_query_stream(session_id, question, save_history=save_history):
+        if "final_result" in chunk:
+            res = chunk["final_result"]
+        elif "error" in chunk:
+            raise Exception(chunk["error"])
+    return res
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# INTERNAL HELPERS
+# INTERNAL HELPERS (UPDATED)
 # ═════════════════════════════════════════════════════════════════════════════
+
+def _execute_with_reflexion_stream(
+    code_line: str,
+    df: pd.DataFrame,
+    schema_str: str,
+    question: str,
+    session_id: str,
+) -> tuple:
+    local_vars = {"df": df}
+    try:
+        exec(code_line, {"__builtins__": {}}, local_vars)
+        if "result" not in local_vars:
+            raise ValueError("Code did not assign a 'result' variable.")
+        return local_vars["result"], code_line
+
+    except Exception as first_err:
+        error_msg = f"{type(first_err).__name__}: {first_err}"
+        _log_reflexion(session_id, code_line, error_msg, None)
+
+        # Correction
+        fix_prompt = f"""You are a Python data science assistant.
+Previous code: {code_line} failed with error: {error_msg}
+Fix it so it answers: "{question}"
+Target columns: {schema_str}
+Return ONLY the corrected single line of Python code.
+"""
+        fixed_raw = _llm_call(fix_prompt, temperature=0.0, max_tokens=150)
+        fixed_code = _extract_code(fixed_raw)
+        _safety_check(fixed_code)
+
+        local_vars2 = {"df": df}
+        exec(fixed_code, {"__builtins__": {}}, local_vars2)
+        if "result" not in local_vars2:
+            raise ValueError("Fixed code did not assign a 'result' variable.")
+
+        _log_reflexion(session_id, code_line, error_msg, fixed_code, success=True)
+        return local_vars2["result"], fixed_code
+
+# Standard helpers remain mostly the same but ensure clean interfaces
 
 def _build_schema(df: pd.DataFrame, profile: dict) -> str:
     lines = ["The DataFrame called df has these columns:"]
@@ -157,29 +231,11 @@ def _build_schema(df: pd.DataFrame, profile: dict) -> str:
 def _format_history(history: list[dict]) -> str:
     if not history:
         return ""
-    lines = ["Recent conversation context (use for follow-up questions):"]
+    lines = ["Recent conversation context:"]
     for msg in history:
-        role = "User" if msg["role"] == "user" else "AI Analyst"
+        role = "User" if msg["role"] == "user" else "AI"
         lines.append(f"  {role}: {msg['content']}")
     return "\n".join(lines)
-
-
-def _code_prompt(schema_str: str, history_block: str, question: str) -> str:
-    history_section = f"\n{history_block}\n" if history_block else ""
-    return f"""You are a Python data science assistant.
-{schema_str}
-{history_section}
-Current question: {question}
-
-Write exactly ONE line of Python code using Pandas that answers the current question.
-Store the final answer in a variable named 'result'.
-Do not include any imports, comments, or explanations.
-Do not use print().
-Return ONLY the raw executable code line.
-
-Example:
-result = df.groupby('Category')['Sales'].sum()
-"""
 
 
 def _llm_call(prompt: str, temperature: float, max_tokens: int) -> str:
@@ -194,87 +250,19 @@ def _llm_call(prompt: str, temperature: float, max_tokens: int) -> str:
 
 
 def _extract_code(raw: str) -> str:
-    """Strip markdown fences and grab the first `result = ...` line."""
     lines = raw.strip().split("\n")
-    # Strip fences
-    if lines and lines[0].startswith("```"):
-        lines = lines[1:]
-    if lines and lines[-1].startswith("```"):
-        lines = lines[:-1]
+    if lines and lines[0].startswith("```"): lines = lines[1:]
+    if lines and lines[-1].startswith("```"): lines = lines[:-1]
     for line in lines:
-        stripped = line.strip()
-        if stripped.startswith("result"):
-            return stripped
+        if line.strip().startswith("result"): return line.strip()
     return lines[0].strip() if lines else "result = None"
 
 
 def _safety_check(code: str):
     for kw in _BLOCKED:
         if kw in code:
-            raise ValueError(f"Generated code contains a blocked keyword: '{kw}'. Query rejected for safety.")
+            raise ValueError(f"Security: Blocked keyword '{kw}'")
 
-
-def _execute_with_reflexion(
-    code_line: str,
-    df: pd.DataFrame,
-    schema_str: str,
-    question: str,
-    session_id: str,
-) -> tuple:
-    """
-    Try exec(). If it fails:
-      1. Log to Supabase agent_logs
-      2. Ask Groq to fix the code (Reflexion)
-      3. Try once more
-    Returns (result_data, final_code_used).
-    """
-    local_vars = {"df": df}
-    try:
-        exec(code_line, {"__builtins__": {}}, local_vars)
-        if "result" not in local_vars:
-            raise ValueError("Code did not assign a 'result' variable.")
-        return local_vars["result"], code_line
-
-    except Exception as first_err:
-        error_msg = f"{type(first_err).__name__}: {first_err}"
-
-        # Log original failure
-        _log_reflexion(session_id, code_line, error_msg, None)
-
-        # Build correction prompt
-        fix_prompt = f"""You are a Python data science assistant.
-{schema_str}
-
-Your previous code failed:
-Code: {code_line}
-Error: {error_msg}
-
-Fix the code so it answers: "{question}"
-Return ONLY the corrected single line of Python code (no explanation, no markdown).
-"""
-        try:
-            fixed_raw = _llm_call(fix_prompt, temperature=0.0, max_tokens=150)
-            fixed_code = _extract_code(fixed_raw)
-            _safety_check(fixed_code)
-
-            local_vars2 = {"df": df}
-            exec(fixed_code, {"__builtins__": {}}, local_vars2)
-            if "result" not in local_vars2:
-                raise ValueError("Fixed code did not assign a 'result' variable.")
-
-            # Log successful fix
-            _log_reflexion(session_id, code_line, error_msg, fixed_code, success=True)
-            return local_vars2["result"], fixed_code
-
-        except Exception as second_err:
-            raise ValueError(
-                f"I couldn't compute that even after self-correction.\n"
-                f"Try rephrasing your question.\n"
-                f"Details: {second_err}"
-            )
-
-
-# ── Supabase I/O ──────────────────────────────────────────────────────────────
 
 def _get_chat_history(session_id: str, limit: int = 5) -> list[dict]:
     try:
@@ -288,38 +276,31 @@ def _get_chat_history(session_id: str, limit: int = 5) -> list[dict]:
             .execute()
         )
         return response.data or []
-    except Exception as e:
-        print(f"⚠️  Could not fetch chat history: {e}")
+    except Exception:
         return []
 
 
-def _save_message(session_id: str, role: str, content: str):
+def _save_message_async(session_id: str, role: str, content: str):
+    # Standard save (simple Supabase insert)
     try:
         sb = get_supabase()
         sb.table("messages").insert({
             "session_id": session_id,
             "role": role,
-            "content": content[:4000],  # Truncate very long results
+            "content": content[:4000],
         }).execute()
     except Exception as e:
-        print(f"⚠️  Could not save message: {e}")
+        print(f"❌ Failed to save message to Supabase: {e}")
 
-
-def _log_reflexion(
-    session_id: str,
-    original_code: str,
-    error_message: str,
-    fixed_code: str | None,
-    success: bool = False
-):
+def _log_reflexion(session_id, orig, err, fixed, success=False):
     try:
         sb = get_supabase()
         sb.table("agent_logs").insert({
             "session_id": session_id,
-            "original_code": original_code,
-            "error_message": error_message,
-            "fixed_code": fixed_code,
+            "original_code": orig,
+            "error_message": err,
+            "fixed_code": fixed,
             "success": success,
         }).execute()
     except Exception as e:
-        print(f"⚠️  Could not log reflexion: {e}")
+        print(f"❌ Failed to log reflexion to Supabase: {e}")

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { MessageSquare, X, Bot, User, Search } from 'lucide-react';
+import { MessageSquare, X, Bot, User, Search, Download } from 'lucide-react';
 import QueryInterface from './QueryInterface';
 import ResultCards from './ResultCards';
 import axios from 'axios';
@@ -15,6 +15,7 @@ const ChatInterface = ({
     onError,
     isLoading,
     setIsLoading,
+    loadingMessage,
     setLoadingMessage,
     onHistoryLoaded,
     isOpen,
@@ -83,12 +84,38 @@ const ChatInterface = ({
                                 </div>
                             </div>
                         </div>
-                        <button 
-                            onClick={onToggle} 
-                            className="p-2 hover:bg-slate-200 dark:hover:bg-deep-800 rounded-xl transition-colors text-slate-400"
-                        >
-                            <X className="w-5 h-5" />
-                        </button>
+                        <div className="flex items-center gap-2">
+                            {sessionId && (
+                                <button
+                                    onClick={async () => {
+                                        try {
+                                            const response = await fetch(`${API_URL}/api/report/export-pdf/${sessionId}`);
+                                            if (!response.ok) throw new Error('Export failed');
+                                            const blob = await response.blob();
+                                            const url = window.URL.createObjectURL(blob);
+                                            const a = document.createElement('a');
+                                            a.href = url;
+                                            a.download = `Analysis_Report_${sessionId.slice(0, 8)}.pdf`;
+                                            document.body.appendChild(a);
+                                            a.click();
+                                            a.remove();
+                                        } catch (err) {
+                                            onError('Failed to export PDF. Please try again.');
+                                        }
+                                    }}
+                                    className="p-2 hover:bg-slate-200 dark:hover:bg-deep-800 rounded-xl transition-colors text-slate-500 dark:text-slate-400"
+                                    title="Download Report as PDF"
+                                >
+                                    <Download className="w-5 h-5" />
+                                </button>
+                            )}
+                            <button
+                                onClick={onToggle}
+                                className="p-2 hover:bg-slate-200 dark:hover:bg-deep-800 rounded-xl transition-colors text-slate-400"
+                            >
+                                <X className="w-5 h-5" />
+                            </button>
+                        </div>
                     </div>
 
                     {/* ── Messages Area ─────────────────────────────────── */}
@@ -99,47 +126,56 @@ const ChatInterface = ({
                             </div>
                         )}
 
-                        {results.length === 0 && !historyLoading ? (
-                            <div className="h-full flex flex-col items-center justify-center text-center p-8 space-y-6">
-                                <div className="p-4 bg-brand-500/10 rounded-3xl">
-                                    <Bot className="w-12 h-12 text-brand-500" />
-                                </div>
-                                <div>
-                                    <h4 className="font-bold text-slate-800 dark:text-slate-100 mb-2">How can I help you today?</h4>
-                                    <p className="text-sm text-slate-500 dark:text-slate-400">
-                                        Ask me to analyze trends, find relationship, or generate summaries of your data.
-                                    </p>
-                                </div>
-                            </div>
-                        ) : (
-                            <div className="space-y-6">
-                                {results.map((res) => (
-                                    <div key={res.id} className="space-y-4">
-                                        {/* User Message */}
-                                        <div className="flex justify-end">
-                                            <div className="max-w-[85%] bg-brand-500 text-white rounded-2xl rounded-tr-sm p-4 text-sm font-semibold shadow-lg shadow-brand-500/20 border border-brand-400/30">
-                                                {res.question}
-                                            </div>
-                                        </div>
+                        {/* Filtered to only user messages */}
+                        {(() => {
+                            const chatResults = results.filter(r => !r.is_automated);
 
-                                        {/* Assistant Response */}
-                                        <div className="flex justify-start gap-3">
-                                            <div className="w-8 h-8 rounded-full bg-brand-500/10 flex items-center justify-center flex-shrink-0">
-                                                <Bot className="w-5 h-5 text-brand-500" />
-                                            </div>
-                                            <div className="flex-1 min-w-0">
-                                                <ResultCards result={res} isMinimal={true} />
-                                                {res.was_self_corrected && (
-                                                    <div className="mt-2 text-[10px] font-bold text-amber-500 uppercase tracking-widest flex items-center gap-1 px-1">
-                                                        <Search className="w-3 h-3" /> Agent Reflexion Fix Applied
-                                                    </div>
-                                                )}
-                                            </div>
+                            if (chatResults.length === 0 && !historyLoading) {
+                                return (
+                                    <div className="h-full flex flex-col items-center justify-center text-center p-8 space-y-6">
+                                        <div className="p-4 bg-brand-500/10 rounded-3xl">
+                                            <Bot className="w-12 h-12 text-brand-500" />
+                                        </div>
+                                        <div>
+                                            <h4 className="font-bold text-slate-800 dark:text-slate-100 mb-2">How can I help you today?</h4>
+                                            <p className="text-sm text-slate-500 dark:text-slate-400">
+                                                Ask me to analyze trends, find relationship, or generate summaries of your data.
+                                            </p>
                                         </div>
                                     </div>
-                                ))}
-                            </div>
-                        )}
+                                );
+                            }
+
+                            return (
+                                <div className="space-y-6">
+                                    {chatResults.map((res) => (
+                                        <div key={res.id} className="space-y-4">
+                                            {/* User Message */}
+                                            <div className="flex justify-end">
+                                                <div className="max-w-[85%] bg-brand-500 text-white rounded-2xl rounded-tr-sm p-4 text-sm font-semibold shadow-lg shadow-brand-500/20 border border-brand-400/30">
+                                                    {res.question}
+                                                </div>
+                                            </div>
+
+                                            {/* Assistant Response */}
+                                            <div className="flex justify-start gap-3">
+                                                <div className="w-8 h-8 rounded-full bg-brand-500/10 flex items-center justify-center flex-shrink-0">
+                                                    <Bot className="w-5 h-5 text-brand-500" />
+                                                </div>
+                                                <div className="flex-1 min-w-0">
+                                                    <ResultCards result={res} isMinimal={true} />
+                                                    {res.was_self_corrected && (
+                                                        <div className="mt-2 text-[10px] font-bold text-amber-500 uppercase tracking-widest flex items-center gap-1 px-1">
+                                                            <Search className="w-3 h-3" /> Agent Reflexion Fix Applied
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            );
+                        })()}
 
                         {/* Thinking Indicator */}
                         {isLoading && (
@@ -147,12 +183,17 @@ const ChatInterface = ({
                                 <div className="w-8 h-8 rounded-full bg-brand-500/10 flex items-center justify-center flex-shrink-0">
                                     <Bot className="w-5 h-5 text-brand-500 animate-pulse" />
                                 </div>
-                                <div className="bg-slate-50 dark:bg-deep-800/40 rounded-2xl p-4 border border-slate-200 dark:border-deep-700">
+                                <div className="bg-slate-50 dark:bg-deep-800/40 rounded-2xl p-4 border border-slate-200 dark:border-deep-700 flex flex-col space-y-2">
                                     <div className="flex gap-1">
                                         <div className="w-1.5 h-1.5 bg-brand-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
                                         <div className="w-1.5 h-1.5 bg-brand-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
                                         <div className="w-1.5 h-1.5 bg-brand-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
                                     </div>
+                                    {loadingMessage && (
+                                        <p className="text-[11px] font-medium text-slate-500 dark:text-slate-400 animate-pulse truncate max-w-[200px]">
+                                            {loadingMessage}
+                                        </p>
+                                    )}
                                 </div>
                             </div>
                         )}

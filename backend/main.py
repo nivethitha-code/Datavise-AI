@@ -5,7 +5,7 @@ import os
 from dotenv import load_dotenv
 
 from database import init_db, init_storage
-from routers import upload_router, query_router, history_router
+from routers import upload_router, query_router, history_router, report_router
 
 # Load environment variables
 base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -37,9 +37,11 @@ def read_root():
     return {"status": "ok", "message": "AI Data Analyst – Agentic Backend is running"}
 
 # ── Routers ───────────────────────────────────────────────────────────────────
-app.include_router(upload_router)
-app.include_router(query_router)
-app.include_router(history_router)
+# ── Routers ───────────────────────────────────────────────────────────────────
+app.include_router(upload_router, prefix="/api")
+app.include_router(query_router, prefix="/api")
+app.include_router(history_router, prefix="/api")
+app.include_router(report_router, prefix="/api")
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 8000))
