@@ -100,11 +100,12 @@ const QueryInterface = ({
                         if (!trimmedPart || !trimmedPart.startsWith('data: ')) continue;
                         
                         try {
-                            const data = JSON.parse(trimmedPart.replace('data: ', ''));
+                            const data = JSON.parse(trimmedPart.replace(/^data: /, ''));
                             if (data.status) {
                                 setLoadingMessage(data.status);
                             } else if (data.final_result) {
                                 finalData = data.final_result;
+                                break; // Got what we need, don't wait for stream to close
                             } else if (data.error) {
                                 throw new Error(data.error);
                             }
