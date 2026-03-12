@@ -15,11 +15,13 @@ load_dotenv(dotenv_path)
 app = FastAPI(title="AI Data Analyst API – Agentic Edition")
 
 # CORS
-allowed_origins = os.getenv("ALLOWED_ORIGINS", "*").split(",")
+allowed_origins = os.getenv("ALLOWED_ORIGINS", "").split(",")
+allow_all = "*" in allowed_origins or not any(allowed_origins)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allowed_origins,
-    allow_credentials=True,
+    allow_origins=["*"] if allow_all else allowed_origins,
+    allow_credentials=False if allow_all else True,
     allow_methods=["*"],
     allow_headers=["*"],
 )

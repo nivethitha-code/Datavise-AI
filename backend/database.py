@@ -45,7 +45,7 @@ def get_supabase() -> Client:
         
         # Configure client to use the ai_analyst schema
         opts = ClientOptions(schema="ai_analyst")
-        _supabase = create_client(url, key, options=opts)
+        _supabase = create_client(url, key)
     return _supabase
 
 def init_db():
