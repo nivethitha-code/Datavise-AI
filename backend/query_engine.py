@@ -57,20 +57,31 @@ Example: ["Show sales by region", "What is the trend over time?"]
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _data_agent_prompt(schema_str: str, history_block: str, question: str) -> str:
-    return f"""You are the **Data Analyst Agent**. Your goal is to write precise Python code to answer data questions.
+    return f"""You are the **Data Analyst Agent**. Your ONLY job is to write Python/Pandas code that extracts and returns raw data.
 {schema_str}
 {history_block}
 Current question: {question}
 
-Write exactly ONE line of Python code using Pandas that calculates the answer.
-Store the final result in a variable named 'result'.
-Constraints:
-- Return ONLY the raw code line.
-- No imports, no comments, no markdown fences.
-- Use only valid columns from the schema provided.
-- If the question is a follow-up, use the history context.
+Write ONE line of Python code (using Pandas only) that computes the answer and stores it in 'result'.
+The variable 'result' MUST be a pandas DataFrame, pandas Series, or a scalar value.
 
-Example: result = df['Sales'].sum()
+STRICT RULES:
+- NEVER use matplotlib, plt, seaborn, plotly or any charting library. A separate charting engine handles visualization.
+- NEVER call .plot(), .show(), .draw(), or any rendering method.
+- NEVER write import statements.
+- NEVER write markdown, comments, or explanations — ONLY the raw Python code line.
+- Use only column names from the schema above.
+- If the user says 'pie chart', 'bar chart', 'line chart' etc., still only return the underlying DATA, not a chart.
+
+Good examples:
+  result = df['emotion'].value_counts().reset_index()
+  result = df.groupby('emotion')['mfcc_0'].mean().reset_index()
+  result = df['mfcc_0'].max()
+
+Bad examples (NEVER do this):
+  df.plot(kind='pie')  ← FORBIDDEN
+  plt.bar(...)         ← FORBIDDEN
+  import matplotlib    ← FORBIDDEN
 """
 
 def _viz_agent_prompt(question: str, data_summary: str) -> str:
@@ -98,6 +109,7 @@ Focus on the "why" or the business impact. Do not just repeat the numbers.
 def execute_query_stream(session_id: str, question: str, save_history: bool = True):
     """
     Multi-Agent pipeline that yields status logs in real-time.
+    Routes conversational questions to a direct LLM, data questions to the full pipeline.
     Yields dicts with 'status' or 'final_result'.
     """
     try:
@@ -115,11 +127,52 @@ def execute_query_stream(session_id: str, question: str, save_history: bool = Tr
         schema_str = _build_schema(df, profile)
         history_block = _format_history(history)
 
+        # 1b. Intent Classification: is this a data question or a conversational question?
+        intent_prompt = f"""You are a question classifier.
+Classify the following question as either "data" or "chat".
+- "data": questions that require querying, aggregating, or visualizing the dataset (e.g., "how many rows?", "show me a chart", "what is the average of X?", "correlation between X and Y")
+- "chat": general conversation, explanations, greetings, methodology questions, or anything that doesn't require running code on the data (e.g., "what does MFCC mean?", "hi", "explain this", "what should I analyze?", "thank you")
+
+Question: {question}
+Reply with ONLY one word: "data" or "chat"."""
+
+        intent = _llm_call(intent_prompt, temperature=0.0, max_tokens=5).strip().lower()
+        print(f"🧭 [Query] Intent classified as: '{intent}'")
+
+        if "chat" in intent:
+            # Fast-path: answer conversationally using the dataset context
+            yield {"status": "💬 Thinking about your question..."}
+            chat_prompt = f"""You are a friendly and knowledgeable AI Data Analyst assistant.
+The user has uploaded a dataset. Here is the schema for context:
+{schema_str}
+{history_block}
+
+The user says: {question}
+
+Provide a helpful, conversational, and concise response. If relevant, refer to the dataset context above.
+Do NOT generate any Python code. Just answer the question naturally."""
+            answer = _llm_call(chat_prompt, temperature=0.6, max_tokens=400)
+
+            if save_history:
+                _save_message_async(session_id, "user", question)
+                _save_message_async(session_id, "assistant", answer)
+
+            yield {
+                "final_result": {
+                    "generated_code": None,
+                    "chart_json": None,
+                    "insight": answer,
+                    "raw_result": None,
+                    "agents_involved": ["Chat Agent"]
+                }
+            }
+            return
+
         # 2. Data Agent: Generate Code
         print("🤖 [Query] Step 2: Generating code...")
         yield {"status": "🤖 Data Agent: Generating analytical solution..."}
         prompt = _data_agent_prompt(schema_str, history_block, question)
-        raw_code = _llm_call(prompt, temperature=0.0, max_tokens=150)
+        raw_code = _llm_call(prompt, temperature=0.0, max_tokens=300)
         code_line = _extract_code(raw_code)
         _safety_check(code_line)
 
@@ -163,6 +216,7 @@ def execute_query_stream(session_id: str, question: str, save_history: bool = Tr
 
     except Exception as e:
         yield {"error": str(e)}
+
 
 
 def execute_query(session_id: str, question: str, save_history: bool = False) -> dict:
