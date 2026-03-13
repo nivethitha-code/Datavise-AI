@@ -85,7 +85,8 @@ const QueryInterface = ({
             let finalData = null;
 
             let buffer = '';
-            while (true) {
+            let streamDone = false;
+            while (!streamDone) {
                 const { value, done } = await reader.read();
                 
                 if (value) {
@@ -105,11 +106,13 @@ const QueryInterface = ({
                                 setLoadingMessage(data.status);
                             } else if (data.final_result) {
                                 finalData = data.final_result;
-                                break; // Got what we need, don't wait for stream to close
+                                streamDone = true; // Exit the outer while loop immediately
+                                break;
                             } else if (data.error) {
                                 throw new Error(data.error);
                             }
                         } catch (e) {
+                            if (e.message && !e.message.includes('JSON')) throw e; // rethrow real errors
                             console.error('Error parsing stream part:', e, trimmedPart);
                         }
                     }
@@ -119,13 +122,13 @@ const QueryInterface = ({
                     // Process any remaining data in the buffer after stream ends
                     if (buffer && buffer.trim().startsWith('data: ')) {
                         try {
-                            const data = JSON.parse(buffer.trim().replace('data: ', ''));
+                            const data = JSON.parse(buffer.trim().replace(/^data: /, ''));
                             if (data.final_result) finalData = data.final_result;
                         } catch (e) {
                             console.error('Final buffer parse error:', e);
                         }
                     }
-                    break;
+                    streamDone = true;
                 }
             }
 

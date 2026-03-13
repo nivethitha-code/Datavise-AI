@@ -14,9 +14,13 @@ async def query_data(request: QueryRequest):
     result_queue = queue.Queue()
 
     def run_query():
-        for chunk in query_engine.execute_query_stream(request.session_id, request.question):
-            result_queue.put(chunk)
-        result_queue.put(None)  # sentinel to signal completion
+        try:
+            for chunk in query_engine.execute_query_stream(request.session_id, request.question):
+                result_queue.put(chunk)
+        except Exception as e:
+            result_queue.put({"error": str(e)})
+        finally:
+            result_queue.put(None)  # Always signal completion
 
     thread = threading.Thread(target=run_query, daemon=True)
     thread.start()
