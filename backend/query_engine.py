@@ -57,7 +57,7 @@ Example: ["Show sales by region", "What is the trend over time?"]
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _data_agent_prompt(schema_str: str, history_block: str, question: str) -> str:
-    return f"""You are the **Data Analyst Agent**. Your ONLY job is to write Python/Pandas code that extracts and returns raw data.
+    return f"""You are the **Data Analyst Agent**. Your ONLY job is to write Python/Pandas code that performs PROPER, deep analysis to answer data questions accurately.
 {schema_str}
 {history_block}
 Current question: {question}
@@ -71,12 +71,13 @@ STRICT RULES:
 - NEVER write import statements.
 - NEVER write markdown, comments, or explanations — ONLY the raw Python code line.
 - Use only column names from the schema above.
-- If the user says 'pie chart', 'bar chart', 'line chart' etc., still only return the underlying DATA, not a chart.
+- If the user says 'pie chart', 'bar chart', 'line chart', 'box plot', 'histogram', or 'area chart' etc., still only return the underlying DATA, not a chart.
 
 Good examples:
   result = df['emotion'].value_counts().reset_index()
   result = df.groupby('emotion')['mfcc_0'].mean().reset_index()
   result = df['mfcc_0'].max()
+  result = df['age'].dropna() # For histogram/box plot
 
 Bad examples (NEVER do this):
   df.plot(kind='pie')  ← FORBIDDEN
@@ -142,16 +143,18 @@ Reply with ONLY one word: "data" or "chat"."""
         if "chat" in intent:
             # Fast-path: answer conversationally using the dataset context
             yield {"status": "💬 Thinking about your question..."}
-            chat_prompt = f"""You are a friendly and knowledgeable AI Data Analyst assistant.
-The user has uploaded a dataset. Here is the schema for context:
+            chat_prompt = f"""You are 'Datavise AI', a friendly and expert Data Analyst.
+The user has uploaded a dataset. Context for your awareness:
 {schema_str}
-{history_block}
 
-The user says: {question}
+User's message: "{question}"
 
-Provide a helpful, conversational, and concise response. If relevant, refer to the dataset context above.
-Do NOT generate any Python code. Just answer the question naturally."""
-            answer = _llm_call(chat_prompt, temperature=0.6, max_tokens=400)
+Instructions:
+1. If the user is just saying 'hi', 'hello', or greeting you, respond warmly and offer to help analyze their data.
+2. If the user asks a general question, answer in a professional yet conversational way.
+3. Be concise. Avoid dumping technical schema details unless specifically asked.
+4. Do NOT generate any Python code. Answer in plain English."""
+            answer = _llm_call(chat_prompt, temperature=0.7, max_tokens=400)
 
             if save_history:
                 _save_message_async(session_id, "user", question)
@@ -326,7 +329,7 @@ def _get_chat_history(session_id: str, limit: int = 5) -> list[dict]:
             .select("role, content, created_at")
             .eq("session_id", session_id)
             .order("created_at", desc=False)
-            .limit(limit)
+            .limit(50) # Increased for PDF reports
             .execute()
         )
         return response.data or []
